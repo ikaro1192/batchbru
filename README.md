@@ -68,7 +68,7 @@ This repository is itself an action that puts `batchbru` on `PATH`, so the comma
 from a workflow as they are on a terminal:
 
 ```yaml
-- uses: ikaro1192/batchbru@main   # pin to a release tag once one exists
+- uses: ikaro1192/batchbru@v0.1.0
   with:
     version: v0.1.0   # or "latest", the default
 - uses: aws-actions/configure-aws-credentials@v6
