@@ -231,7 +231,7 @@ Configuration files and job definition files are evaluated as `text/template`.
 
 | Function | Description |
 |---|---|
-| `env "NAME" "default"` | Read an environment variable |
+| `env "NAME" "default"` | Read an environment variable, falling back to the default when it is unset **or empty** |
 | `must_env "NAME"` | Read an environment variable; error if undefined |
 | `ssm "/path/to/param"` | Fetch a value from SSM Parameter Store (SecureString is decrypted) |
 | `json_escape` | Escape a value as a JSON string |
@@ -244,15 +244,110 @@ Use `--ext-str` / `--ext-code` to pass Jsonnet external variables.
 When using multiple tfstate sources, set `func_prefix`.
 With `func_prefix: shared_`, reference it as `{{ shared_tfstate ... }}`.
 
+### Prefer `must_env` for the image tag
+
+Neither function resolves anything by itself: `env` and `must_env` only read the environment, so
+``{{ env `IMAGE_TAG` `latest` }}`` produces the literal string `latest` when `IMAGE_TAG` is unset
+— never a commit hash or the newest image in the repository. Whatever identifies the build has to
+be put into the environment by whoever invokes batchbru:
+
+```yaml
+- run: batchbru deploy
+  env:
+    IMAGE_TAG: ${{ github.sha }}
+```
+
+For anything deployed for real, write the image tag with `must_env` rather than `env`:
+
+```jsonnet
+image: '{{ tfstate `aws_ecr_repository.example.repository_url` }}:{{ must_env `IMAGE_TAG` }}',
+```
+
+A default turns a forgotten environment variable into a silent success. Falling back to a mutable
+tag such as `latest` leaves the rendered definition byte-for-byte identical between releases, so
+`deploy` reports no changes and registers nothing, while the image behind the tag is replaced
+underneath the revision that is already current. Jobs then run code that no revision records, and
+`rollback` cannot get back to the previous image because no revision ever described it. With
+`must_env` the deploy fails instead, which is the outcome you want at that point.
+
+The definitions under [example/](example/) use `env` with a default so that they can be rendered
+without any environment set up; that is a convenience for reading the examples, not a pattern to
+copy into a pipeline.
+
 ## Required IAM permissions
 
 | Command | Actions |
 |---|---|
-| `diff` / `status` / `revisions` / `init` | `batch:DescribeJobDefinitions` |
-| `deploy` | The above + `batch:RegisterJobDefinition` (plus `batch:TagResource` when using `tags`) |
-| `rollback` / `deregister` | The above + `batch:DeregisterJobDefinition` |
-| `run` | `batch:SubmitJob` (plus `batch:DescribeJobs` with `--wait`) |
-| Template functions (when used) | `ssm:GetParameter`, read access to the tfstate location |
+| `render` | none — it evaluates the files locally |
+| `init` / `diff` / `status` / `revisions` | `batch:DescribeJobDefinitions` |
+| `deploy` | the above + `batch:RegisterJobDefinition` |
+| `rollback` / `deregister` | the above + `batch:DeregisterJobDefinition` |
+| `run` | `batch:SubmitJob`, plus `batch:DescribeJobs` for `--wait` |
+
+`deploy` needs `DescribeJobDefinitions` as well as `RegisterJobDefinition`, because it compares
+against the latest ACTIVE revision before deciding to register. The same goes for `rollback` and
+`deregister`, which list the revisions before choosing what to deregister.
+
+### The two that are easy to miss
+
+**`iam:PassRole` on every role a definition names.** Registering a definition that sets
+`jobRoleArn` or `executionRoleArn` counts as passing those roles to AWS Batch, so `deploy` is
+denied without it — even though the roles are used by the job at runtime and never by batchbru
+itself. This is the permission a pipeline usually trips over first, and the error names
+`iam:PassRole` rather than anything about job definitions. Grant it on the specific role ARNs.
+
+**`kms:Decrypt` alongside `ssm:GetParameter`.** batchbru always requests SecureString parameters
+with decryption. If a parameter is encrypted with a customer managed key, reading it needs
+`kms:Decrypt` on that key as well; the AWS managed key for Parameter Store needs no extra grant.
+
+### Template functions
+
+| Function | Actions |
+|---|---|
+| `ssm` | `ssm:GetParameter`, plus `kms:Decrypt` on the key as described above |
+| `tfstate` | read access to wherever the state lives: `s3:GetObject` for `s3://`, a Terraform Cloud token for `remote://`, nothing for a local file |
+
+Add `batch:TagResource` if your definitions set `tags`: registering with tags is authorized as a
+tagging operation as well on some AWS services, and granting it costs nothing.
+
+### A policy for a deploy pipeline
+
+Enough for `diff`, `deploy` and `rollback`. Replace the account ID and role names, and add the
+`ssm`, `s3` or `batch:SubmitJob` statements only if you use those.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageJobDefinitions",
+      "Effect": "Allow",
+      "Action": [
+        "batch:DescribeJobDefinitions",
+        "batch:RegisterJobDefinition",
+        "batch:DeregisterJobDefinition",
+        "batch:TagResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PassTheRolesTheDefinitionsReference",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::123456789012:role/batch-job-role",
+        "arn:aws:iam::123456789012:role/batch-execution-role"
+      ]
+    }
+  ]
+}
+```
+
+`batch:DescribeJobDefinitions` does not support resource-level permissions, so it has to be
+granted on `*` and that is what pins the statement above to `*`. `RegisterJobDefinition`,
+`DeregisterJobDefinition` and `TagResource` do support them, so if you want a tighter policy,
+split those three into a second statement scoped to
+`arn:aws:batch:<region>:<account-id>:job-definition/*`.
 
 ## Notes and caveats
 
