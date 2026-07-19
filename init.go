@@ -3,6 +3,7 @@ package batchbru
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,9 +24,7 @@ type InitOption struct {
 
 // Init imports an existing job definition from AWS and starts tracking it in
 // the configuration file, creating the file if it does not exist yet.
-func Init(ctx context.Context, configPath string, opt *InitOption, stdout interface {
-	Write([]byte) (int, error)
-}) error {
+func Init(ctx context.Context, configPath string, opt *InitOption, stdout io.Writer) error {
 	var loadOpts []func(*awsconfig.LoadOptions) error
 	if opt.Region != "" {
 		loadOpts = append(loadOpts, awsconfig.WithRegion(opt.Region))
@@ -102,8 +101,16 @@ func renderInitFile(def map[string]any, format string) (string, string, error) {
 // untouched and the caller is told what to add by hand -- writing the job
 // definition file is still useful on its own, so this is not an error.
 func addToConfig(configPath, path, region string) (string, error) {
+	manual := fmt.Sprintf("could not edit %s automatically; add %q to job_definitions by hand", configPath, path)
+	isJsonnet := strings.EqualFold(filepath.Ext(configPath), ".jsonnet")
+
 	src, err := os.ReadFile(configPath)
 	if os.IsNotExist(err) {
+		// Save writes YAML, which a .jsonnet configuration would then fail to
+		// evaluate, so a missing Jsonnet config is left for the user to create.
+		if isJsonnet {
+			return manual, nil
+		}
 		c := Config{Region: region, JobDefinitions: []string{path}, path: configPath}
 		if err := c.Save(); err != nil {
 			return "", err
@@ -114,8 +121,7 @@ func addToConfig(configPath, path, region string) (string, error) {
 		return "", fmt.Errorf("failed to read %s: %w", configPath, err)
 	}
 
-	manual := fmt.Sprintf("could not edit %s automatically; add %q to job_definitions by hand", configPath, path)
-	if strings.EqualFold(filepath.Ext(configPath), ".jsonnet") {
+	if isJsonnet {
 		return manual, nil
 	}
 

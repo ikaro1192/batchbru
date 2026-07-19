@@ -114,6 +114,23 @@ func TestAddToConfigLeavesUneditableConfigsAlone(t *testing.T) {
 	}
 }
 
+// TestAddToConfigDoesNotCreateJsonnetConfig: a missing .jsonnet configuration
+// must not be created, because addToConfig writes YAML and the file would then
+// fail to evaluate as Jsonnet.
+func TestAddToConfigDoesNotCreateJsonnetConfig(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "batchbru.jsonnet")
+	msg, err := addToConfig(p, "jobdefs/a.jsonnet", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(msg, "by hand") {
+		t.Errorf("the user was not told to edit by hand: %q", msg)
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Error("a YAML file was written to the .jsonnet config path")
+	}
+}
+
 func TestRenderInitFileFormats(t *testing.T) {
 	def := map[string]any{"jobDefinitionName": "x", "type": "container"}
 	for _, c := range []struct{ format, ext string }{

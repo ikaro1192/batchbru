@@ -14,7 +14,7 @@ test:
 
 lint:
 	go vet ./...
-	gofmt -l .
+	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "$$out"; echo "gofmt: the files above are not formatted"; exit 1; fi
 
 clean:
 	rm -f batchbru

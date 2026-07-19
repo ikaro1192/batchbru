@@ -101,15 +101,18 @@ func Filter(defs []*JobDef, patterns []string) ([]*JobDef, error) {
 	var out []*JobDef
 	matched := map[string]bool{}
 	for _, d := range defs {
+		selected := false
 		for _, p := range patterns {
 			ok, err := filepath.Match(p, d.Name)
 			if err != nil {
 				return nil, fmt.Errorf("invalid --name pattern %q: %w", p, err)
 			}
 			if ok {
-				out = append(out, d)
+				if !selected {
+					out = append(out, d)
+					selected = true
+				}
 				matched[p] = true
-				break
 			}
 		}
 	}

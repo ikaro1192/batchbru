@@ -516,6 +516,26 @@ func TestDeregisterContinuesAfterFailure(t *testing.T) {
 	}
 }
 
+// TestDeregisterDryRunReportsListingFailure makes sure --dry-run does not
+// swallow the error for a definition whose revisions could not be listed.
+func TestDeregisterDryRunReportsListingFailure(t *testing.T) {
+	f := newFakeBatch()
+	other := strings.Replace(minimalDef, `"example"`, `"other"`, 1)
+	app, _ := testApp(t, f, minimalDef, other)
+	ctx := context.Background()
+	app.Deploy(ctx, &DeployOption{})
+	app.Deploy(ctx, &DeployOption{Force: true})
+
+	app.Batch = &failingDescribe{fakeBatch: f, failFor: "example"}
+	err := app.Deregister(ctx, &DeregisterOption{KeepLatest: 1, DryRun: true})
+	if err == nil || !strings.Contains(err.Error(), "example") {
+		t.Errorf("the dry run reported %v, want the failure for example", err)
+	}
+	if len(f.deregistered) != 0 {
+		t.Error("--dry-run deregistered a revision")
+	}
+}
+
 // TestDeregisterRejectsKeepingNone guards the operation that would deregister
 // every revision and leave the job definition unusable.
 func TestDeregisterRejectsKeepingNone(t *testing.T) {

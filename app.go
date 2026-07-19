@@ -136,7 +136,7 @@ func (a *App) printf(format string, args ...any) {
 	fmt.Fprintf(a.Stdout, format+"\n", args...)
 }
 
-// errorsFor collects per-definition failures so that one broken definition does
+// errorCollector collects per-definition failures so that one broken definition does
 // not stop the rest from being processed.
 type errorCollector struct {
 	errs []error

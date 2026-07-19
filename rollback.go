@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -126,7 +127,7 @@ func (a *App) Deregister(ctx context.Context, opt *DeregisterOption) error {
 	}
 	if opt.DryRun {
 		a.printf("dry run, nothing was changed")
-		return nil
+		return ec.err()
 	}
 	if !opt.Force {
 		ok, err := confirm(a.Stdout, fmt.Sprintf("deregister %d revision(s)?", len(victims)))
@@ -147,7 +148,7 @@ func (a *App) Deregister(ctx context.Context, opt *DeregisterOption) error {
 	return ec.err()
 }
 
-func confirm(w interface{ Write([]byte) (int, error) }, prompt string) (bool, error) {
+func confirm(w io.Writer, prompt string) (bool, error) {
 	fmt.Fprintf(w, "%s [y/N]: ", prompt)
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil {

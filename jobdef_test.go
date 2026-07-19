@@ -161,6 +161,16 @@ func TestFilter(t *testing.T) {
 	if _, err := Filter(defs, []string{"nope"}); err == nil {
 		t.Fatal("expected an error when --name matches nothing")
 	}
+
+	// Overlapping patterns: a definition already selected by an earlier pattern
+	// still counts as a match for the later one, and is not selected twice.
+	got, err = Filter(defs, []string{"etl-*", "etl-daily"})
+	if err != nil {
+		t.Fatalf("overlapping patterns reported an error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("overlapping patterns selected %d definitions, want 2", len(got))
+	}
 }
 
 // TestJSONEscape covers the values that make naive quote trimming produce
