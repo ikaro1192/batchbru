@@ -1,0 +1,3 @@
+/batchbru
+*.tfstate.backup
+.env

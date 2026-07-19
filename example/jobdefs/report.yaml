@@ -1,0 +1,18 @@
+jobDefinitionName: report
+type: container
+platformCapabilities:
+  - FARGATE
+containerProperties:
+  image: "{{ tfstate `aws_ecr_repository.example.repository_url` }}:{{ env `IMAGE_TAG` `latest` }}"
+  command: ["python", "report.py"]
+  jobRoleArn: "{{ tfstate `aws_iam_role.batch_job.arn` }}"
+  executionRoleArn: "{{ tfstate `aws_iam_role.batch_job.arn` }}"
+  resourceRequirements:
+    - type: VCPU
+      value: "0.5"
+    - type: MEMORY
+      value: "1024"
+timeout:
+  attemptDurationSeconds: 900
+tags:
+  ManagedBy: batchbru

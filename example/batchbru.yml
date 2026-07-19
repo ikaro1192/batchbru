@@ -1,0 +1,10 @@
+region: ap-northeast-1
+
+job_definitions:
+  - jobdefs/*.jsonnet
+  - jobdefs/*.yaml
+
+plugins:
+  - name: tfstate
+    config:
+      url: ./terraform.tfstate
