@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
+	"sort"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -274,6 +276,59 @@ func isDefaultValue(v any, path string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// RemoteOnlyPaths lists the dotted paths of members that survived PruneDefaults
+// on the remote side but do not exist in the local definition. Array indexes
+// are elided, the same convention as nonFalsyDefaults. Such a member is either
+// something the user removed on purpose, or a default the API materialised that
+// nonFalsyDefaults does not know about yet -- a false diff.
+func RemoteOnlyPaths(remote, local map[string]any) []string {
+	paths := remoteOnlyObject(remote, local, "")
+	sort.Strings(paths)
+	return slices.Compact(paths)
+}
+
+func remoteOnlyObject(remote, local map[string]any, path string) []string {
+	var out []string
+	for k, rv := range remote {
+		p := k
+		if path != "" {
+			p = path + "." + k
+		}
+		lv, present := local[k]
+		if !present {
+			out = append(out, p)
+			continue
+		}
+		out = append(out, remoteOnlyValue(rv, lv, p)...)
+	}
+	return out
+}
+
+func remoteOnlyValue(rv, lv any, path string) []string {
+	switch r := rv.(type) {
+	case map[string]any:
+		l, ok := lv.(map[string]any)
+		if !ok {
+			return nil
+		}
+		return remoteOnlyObject(r, l, path)
+	case []any:
+		l, ok := lv.([]any)
+		if !ok {
+			return nil
+		}
+		var out []string
+		for i, e := range r {
+			if i < len(l) {
+				out = append(out, remoteOnlyValue(e, l[i], path)...)
+			}
+		}
+		return out
+	default:
+		return nil
 	}
 }
 

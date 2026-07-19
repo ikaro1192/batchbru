@@ -23,6 +23,7 @@ type CLI struct {
 	Render     RenderOption     `cmd:"" help:"print the fully evaluated job definitions"`
 	Diff       DiffOption       `cmd:"" help:"show the difference against the latest ACTIVE revision"`
 	Deploy     DeployOption     `cmd:"" help:"register a new revision for changed job definitions"`
+	Run        RunOption        `cmd:"" help:"submit a one-off job to smoke-test the latest ACTIVE revision"`
 	Status     StatusOption     `cmd:"" help:"show the latest ACTIVE revision of each job definition"`
 	Revisions  RevisionsOption  `cmd:"" help:"list the revisions of each job definition"`
 	Rollback   RollbackOption   `cmd:"" help:"deregister the latest ACTIVE revision"`
@@ -73,6 +74,8 @@ func Run(ctx context.Context, args []string) error {
 		return app.Diff(ctx, &cli.Diff)
 	case "deploy":
 		return app.Deploy(ctx, &cli.Deploy)
+	case "run":
+		return app.Run(ctx, &cli.Run)
 	case "status":
 		return app.Status(ctx, &cli.Status)
 	case "revisions":

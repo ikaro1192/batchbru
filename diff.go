@@ -32,9 +32,10 @@ func (a *App) Diff(ctx context.Context, opt *DiffOption) error {
 			ec.add(jd.Name, err)
 			continue
 		}
-		if d != "" {
+		if d.text != "" {
 			changed = true
-			fmt.Fprint(a.Stdout, colorizeDiff(d))
+			fmt.Fprint(a.Stdout, colorizeDiff(d.text))
+			a.falseDiffHint(jd.Name, d.remoteOnly)
 		}
 	}
 	if err := ec.err(); err != nil {
@@ -46,41 +47,66 @@ func (a *App) Diff(ctx context.Context, opt *DiffOption) error {
 	return nil
 }
 
+// diffResult is what diffOne reports: the unified diff text (empty when the
+// definitions are equivalent) and the members that exist only remotely.
+type diffResult struct {
+	text       string
+	remoteOnly []string
+}
+
 // diffOne renders the unified diff between the latest ACTIVE revision of jd and
-// its local definition. An empty result means they are equivalent.
-func (a *App) diffOne(ctx context.Context, jd *JobDef) (string, error) {
+// its local definition. An empty text means they are equivalent.
+func (a *App) diffOne(ctx context.Context, jd *JobDef) (diffResult, error) {
 	remote, err := latestActive(ctx, a.Batch, jd.Name)
 	if err != nil {
-		return "", err
+		return diffResult{}, err
 	}
 
 	var (
 		remoteText string
+		remoteOnly []string
 		fromLabel  = fmt.Sprintf("%s (no ACTIVE revision)", jd.Name)
 	)
 	if remote != nil {
 		m, err := RemoteToMap(*remote)
 		if err != nil {
-			return "", fmt.Errorf("failed to normalize the remote definition: %w", err)
+			return diffResult{}, fmt.Errorf("failed to normalize the remote definition: %w", err)
 		}
 		m = PruneDefaults(m, jd.Def)
+		remoteOnly = RemoteOnlyPaths(m, jd.Def)
 		remoteText, err = MarshalIndent(m)
 		if err != nil {
-			return "", err
+			return diffResult{}, err
 		}
 		fromLabel = fmt.Sprintf("%s:%d", jd.Name, aws.ToInt32(remote.Revision))
 	}
 
 	localText, err := MarshalIndent(jd.Def)
 	if err != nil {
-		return "", err
+		return diffResult{}, err
 	}
 	if remoteText == localText {
-		return "", nil
+		return diffResult{}, nil
 	}
 	edits := myers.ComputeEdits(span.URIFromPath(fromLabel), remoteText, localText)
 	u := gotextdiff.ToUnified(fromLabel, jd.Path, remoteText, edits)
-	return fmt.Sprint(u), nil
+	return diffResult{text: fmt.Sprint(u), remoteOnly: remoteOnly}, nil
+}
+
+// falseDiffHint warns about members that exist only in the remote definition.
+// Removing a member on purpose looks exactly like the API having materialised a
+// default that nonFalsyDefaults does not know about; in the latter case the
+// diff is false and deploy would register a redundant revision on every run, so
+// point the user at the workaround and the issue tracker.
+func (a *App) falseDiffHint(name string, remoteOnly []string) {
+	if len(remoteOnly) == 0 {
+		return
+	}
+	fmt.Fprintf(a.Stderr, "%s: only in the remote definition: %s\n", name, strings.Join(remoteOnly, ", "))
+	fmt.Fprint(a.Stderr, "If you did not remove these members, they are probably defaults the API filled in\n"+
+		"and this is a false diff: deploying would register a redundant revision on every run.\n"+
+		"Add the members to your local file to silence it, and please report them at\n"+
+		"https://github.com/ikaro1192/batchbru/issues so batchbru can learn the default.\n")
 }
 
 func colorizeDiff(s string) string {

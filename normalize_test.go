@@ -267,6 +267,33 @@ func TestPruneDefaultsKeepsRealDifferences(t *testing.T) {
 	}
 }
 
+// TestRemoteOnlyPaths checks the dotted paths reported for members that only
+// the remote definition has, including inside nested objects and array
+// elements (whose indexes are elided).
+func TestRemoteOnlyPaths(t *testing.T) {
+	remote := map[string]any{
+		"a": int64(1),
+		"b": map[string]any{"c": int64(1), "d": int64(2)},
+		"e": []any{
+			map[string]any{"f": int64(1)},
+			map[string]any{"f": int64(1), "g": int64(2)},
+		},
+	}
+	local := map[string]any{
+		"a": int64(1),
+		"b": map[string]any{"c": int64(1)},
+		"e": []any{
+			map[string]any{"f": int64(1)},
+			map[string]any{"f": int64(1)},
+		},
+	}
+	got := RemoteOnlyPaths(remote, local)
+	want := []string{"b.d", "e.g"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("RemoteOnlyPaths = %v, want %v", got, want)
+	}
+}
+
 // TestNormalizeRejectsUnknownMembers checks that a misspelled member is
 // reported rather than silently dropped.
 func TestNormalizeRejectsUnknownMembers(t *testing.T) {

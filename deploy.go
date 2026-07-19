@@ -40,11 +40,12 @@ func (a *App) deployOne(ctx context.Context, jd *JobDef, opt *DeployOption) erro
 		if err != nil {
 			return err
 		}
-		if d == "" {
+		if d.text == "" {
 			a.printf("%s: no changes, skipping (use --force to register anyway)", jd.Name)
 			return nil
 		}
-		fmt.Fprint(a.Stdout, colorizeDiff(d))
+		fmt.Fprint(a.Stdout, colorizeDiff(d.text))
+		a.falseDiffHint(jd.Name, d.remoteOnly)
 	}
 	if opt.DryRun {
 		a.printf("%s: would register a new revision (dry run)", jd.Name)

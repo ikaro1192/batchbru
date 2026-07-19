@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -23,6 +24,9 @@ type App struct {
 	Debug  bool
 	Stdout io.Writer
 	Stderr io.Writer
+	// WaitInterval is how often run --wait polls the job status. The zero
+	// value means the default of 5 seconds.
+	WaitInterval time.Duration
 }
 
 // Options are the global command line options.

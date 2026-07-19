@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/batch"
@@ -21,6 +22,13 @@ type fakeBatch struct {
 	revisions    map[string][]types.JobDefinition
 	registered   []*batch.RegisterJobDefinitionInput
 	deregistered []string
+
+	// submitted jobs and the status sequence DescribeJobs plays back for them,
+	// one status per call (the last one repeats).
+	submitted []*batch.SubmitJobInput
+	jobPlan   []types.JobStatus
+	jobReason string
+	jobCalls  int
 }
 
 func newFakeBatch() *fakeBatch {
@@ -61,6 +69,30 @@ func (f *fakeBatch) DeregisterJobDefinition(ctx context.Context, in *batch.Dereg
 		}
 	}
 	return nil, fmt.Errorf("job definition %s not found", arn)
+}
+
+func (f *fakeBatch) SubmitJob(ctx context.Context, in *batch.SubmitJobInput, _ ...func(*batch.Options)) (*batch.SubmitJobOutput, error) {
+	f.submitted = append(f.submitted, in)
+	return &batch.SubmitJobOutput{
+		JobId:   aws.String(fmt.Sprintf("job-%d", len(f.submitted))),
+		JobName: in.JobName,
+	}, nil
+}
+
+func (f *fakeBatch) DescribeJobs(ctx context.Context, in *batch.DescribeJobsInput, _ ...func(*batch.Options)) (*batch.DescribeJobsOutput, error) {
+	if len(f.jobPlan) == 0 {
+		return &batch.DescribeJobsOutput{}, nil
+	}
+	i := f.jobCalls
+	if i >= len(f.jobPlan) {
+		i = len(f.jobPlan) - 1
+	}
+	f.jobCalls++
+	job := types.JobDetail{JobId: aws.String(in.Jobs[0]), Status: f.jobPlan[i]}
+	if job.Status == types.JobStatusFailed && f.jobReason != "" {
+		job.StatusReason = aws.String(f.jobReason)
+	}
+	return &batch.DescribeJobsOutput{Jobs: []types.JobDetail{job}}, nil
 }
 
 // jobDefinitionFor builds what the API would return for a registration,
@@ -245,6 +277,116 @@ func TestDiffShowsChangedMember(t *testing.T) {
 	s := out.String()
 	if !strings.Contains(s, "-") || !strings.Contains(s, "app:v2") {
 		t.Errorf("expected the diff to show the new image, got:\n%s", s)
+	}
+}
+
+// TestRunWaitsForSuccess submits a smoke-test job and follows it to SUCCEEDED.
+func TestRunWaitsForSuccess(t *testing.T) {
+	f := newFakeBatch()
+	f.jobPlan = []types.JobStatus{types.JobStatusSubmitted, types.JobStatusRunning, types.JobStatusSucceeded}
+	app, out := testApp(t, f, minimalDef)
+	app.WaitInterval = time.Millisecond
+	ctx := context.Background()
+	if err := app.Deploy(ctx, &DeployOption{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.Run(ctx, &RunOption{Queue: "default", Wait: true}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(f.submitted) != 1 {
+		t.Fatalf("submitted %d jobs, want 1", len(f.submitted))
+	}
+	in := f.submitted[0]
+	if aws.ToString(in.JobDefinition) != "example" || aws.ToString(in.JobQueue) != "default" {
+		t.Errorf("submitted definition=%s queue=%s, want example/default",
+			aws.ToString(in.JobDefinition), aws.ToString(in.JobQueue))
+	}
+	for _, s := range []string{"SUBMITTED", "RUNNING", "SUCCEEDED"} {
+		if !strings.Contains(out.String(), s) {
+			t.Errorf("expected the output to report %s, got:\n%s", s, out.String())
+		}
+	}
+}
+
+// TestRunFailureReportsReason makes sure a failed smoke test surfaces as an
+// error carrying the status reason, so CI stops.
+func TestRunFailureReportsReason(t *testing.T) {
+	f := newFakeBatch()
+	f.jobPlan = []types.JobStatus{types.JobStatusRunning, types.JobStatusFailed}
+	f.jobReason = "Essential container in task exited"
+	app, _ := testApp(t, f, minimalDef)
+	app.WaitInterval = time.Millisecond
+	ctx := context.Background()
+	app.Deploy(ctx, &DeployOption{})
+
+	err := app.Run(ctx, &RunOption{Queue: "default", Wait: true})
+	if err == nil || !strings.Contains(err.Error(), "Essential container") {
+		t.Errorf("run reported %v, want the failure reason", err)
+	}
+}
+
+func TestRunWithoutWaitOnlySubmits(t *testing.T) {
+	f := newFakeBatch()
+	app, _ := testApp(t, f, minimalDef)
+	if err := app.Run(context.Background(), &RunOption{Queue: "default"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.submitted) != 1 || f.jobCalls != 0 {
+		t.Errorf("submitted=%d describeJobs calls=%d, want 1 and 0", len(f.submitted), f.jobCalls)
+	}
+}
+
+// TestRunRequiresSingleTarget guards against accidentally smoke-testing every
+// definition in the configuration at once.
+func TestRunRequiresSingleTarget(t *testing.T) {
+	f := newFakeBatch()
+	other := strings.Replace(minimalDef, `"example"`, `"other"`, 1)
+	app, _ := testApp(t, f, minimalDef, other)
+	err := app.Run(context.Background(), &RunOption{Queue: "default"})
+	if err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Errorf("run reported %v, want an error demanding a single target", err)
+	}
+	if len(f.submitted) != 0 {
+		t.Error("a job was submitted despite the ambiguous target")
+	}
+}
+
+// TestDiffHintsAtFalseDiffs: a member that exists only remotely is either an
+// intentional removal or an API default batchbru does not know about. The diff
+// must point that out and name the member, so a false diff gets reported
+// instead of silently registering redundant revisions from CI forever.
+func TestDiffHintsAtFalseDiffs(t *testing.T) {
+	f := newFakeBatch()
+	withRetry := strings.Replace(minimalDef, `"type": "container",`,
+		`"type": "container", "retryStrategy": {"attempts": 3},`, 1)
+	app, out := testApp(t, f, withRetry)
+	ctx := context.Background()
+	if err := app.Deploy(ctx, &DeployOption{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the API materialising a default we do not know: the remote has
+	// retryStrategy, the local definition does not mention it.
+	delete(app.JobDefs[0].Def, "retryStrategy")
+	out.Reset()
+	if err := app.Diff(ctx, &DiffOption{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"only in the remote definition: retryStrategy", "false diff", "issues"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the diff output does not contain %q:\n%s", want, out.String())
+		}
+	}
+
+	// A diff caused by a local change must not trigger the hint.
+	app.JobDefs[0].Def["retryStrategy"] = map[string]any{"attempts": int64(5)}
+	out.Reset()
+	if err := app.Diff(ctx, &DiffOption{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "false diff") {
+		t.Errorf("a genuine local change was flagged as a false diff:\n%s", out.String())
 	}
 }
 

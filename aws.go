@@ -15,6 +15,8 @@ type BatchAPI interface {
 	DescribeJobDefinitions(ctx context.Context, params *batch.DescribeJobDefinitionsInput, optFns ...func(*batch.Options)) (*batch.DescribeJobDefinitionsOutput, error)
 	RegisterJobDefinition(ctx context.Context, params *batch.RegisterJobDefinitionInput, optFns ...func(*batch.Options)) (*batch.RegisterJobDefinitionOutput, error)
 	DeregisterJobDefinition(ctx context.Context, params *batch.DeregisterJobDefinitionInput, optFns ...func(*batch.Options)) (*batch.DeregisterJobDefinitionOutput, error)
+	SubmitJob(ctx context.Context, params *batch.SubmitJobInput, optFns ...func(*batch.Options)) (*batch.SubmitJobOutput, error)
+	DescribeJobs(ctx context.Context, params *batch.DescribeJobsInput, optFns ...func(*batch.Options)) (*batch.DescribeJobsOutput, error)
 }
 
 const statusActive = "ACTIVE"
@@ -87,4 +89,14 @@ func (d *debugBatch) RegisterJobDefinition(ctx context.Context, in *batch.Regist
 func (d *debugBatch) DeregisterJobDefinition(ctx context.Context, in *batch.DeregisterJobDefinitionInput, optFns ...func(*batch.Options)) (*batch.DeregisterJobDefinitionOutput, error) {
 	d.app.debugf("DeregisterJobDefinition %s", aws.ToString(in.JobDefinition))
 	return d.BatchAPI.DeregisterJobDefinition(ctx, in, optFns...)
+}
+
+func (d *debugBatch) SubmitJob(ctx context.Context, in *batch.SubmitJobInput, optFns ...func(*batch.Options)) (*batch.SubmitJobOutput, error) {
+	d.app.debugf("SubmitJob name=%s queue=%s", aws.ToString(in.JobDefinition), aws.ToString(in.JobQueue))
+	return d.BatchAPI.SubmitJob(ctx, in, optFns...)
+}
+
+func (d *debugBatch) DescribeJobs(ctx context.Context, in *batch.DescribeJobsInput, optFns ...func(*batch.Options)) (*batch.DescribeJobsOutput, error) {
+	d.app.debugf("DescribeJobs jobs=%v", in.Jobs)
+	return d.BatchAPI.DescribeJobs(ctx, in, optFns...)
 }
