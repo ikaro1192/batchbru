@@ -25,8 +25,8 @@ runs:
   using: 'composite'
   steps:
     # Release archives are named without the version so that "latest" can be
-    # downloaded without first resolving it to a tag; a release pipeline added
-    # later has to follow the same convention.
+    # downloaded without first resolving it to a tag. .goreleaser.yml produces
+    # that name; the two files have to be changed together.
     - name: Download the release binary
       id: download
       shell: bash

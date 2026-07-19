@@ -431,15 +431,3 @@ $ make lint
 `make lint` and `make test` are what CI runs (`.github/workflows/ci.yml`), and
 `.github/workflows/test-action.yml` installs batchbru through `action.yml` on Linux and macOS
 runners to check that the action itself still works.
-
-### Releasing
-
-Pushing a `v*` tag runs GoReleaser (`.goreleaser.yml`) and publishes the binaries:
-
-```console
-$ git tag v0.1.0 && git push origin v0.1.0
-```
-
-The archives are named `batchbru_<os>_<arch>.tar.gz` — tar.gz on every platform, and without the
-version in the file name so that the action can fetch the latest release without resolving it to
-a tag first. `action.yml` depends on both of those, so the two files have to be changed together.
