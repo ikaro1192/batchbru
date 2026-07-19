@@ -71,7 +71,7 @@ from a workflow as they are on a terminal:
 - uses: ikaro1192/batchbru@main   # pin to a release tag once one exists
   with:
     version: v0.1.0   # or "latest", the default
-- uses: aws-actions/configure-aws-credentials@v4
+- uses: aws-actions/configure-aws-credentials@v6
   with:
     role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
     aws-region: ap-northeast-1
