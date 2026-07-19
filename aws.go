@@ -1,9 +1,10 @@
 package batchbru
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/batch"
@@ -32,19 +33,16 @@ func describeRevisions(ctx context.Context, c BatchAPI, name, status string) ([]
 		in.Status = aws.String(status)
 	}
 	var all []types.JobDefinition
-	for {
-		out, err := c.DescribeJobDefinitions(ctx, in)
+	p := batch.NewDescribeJobDefinitionsPaginator(c, in)
+	for p.HasMorePages() {
+		out, err := p.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to describe job definition %s: %w", name, err)
 		}
 		all = append(all, out.JobDefinitions...)
-		if out.NextToken == nil || *out.NextToken == "" {
-			break
-		}
-		in.NextToken = out.NextToken
 	}
-	sort.Slice(all, func(i, j int) bool {
-		return aws.ToInt32(all[i].Revision) > aws.ToInt32(all[j].Revision)
+	slices.SortFunc(all, func(a, b types.JobDefinition) int {
+		return cmp.Compare(aws.ToInt32(b.Revision), aws.ToInt32(a.Revision))
 	})
 	return all, nil
 }

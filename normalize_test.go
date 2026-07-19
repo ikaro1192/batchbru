@@ -295,11 +295,19 @@ func TestRemoteOnlyPaths(t *testing.T) {
 }
 
 // TestNormalizeRejectsUnknownMembers checks that a misspelled member is
-// reported rather than silently dropped.
+// reported rather than silently dropped -- at the top level and, since typos
+// mostly happen deeper down, inside a nested object too.
 func TestNormalizeRejectsUnknownMembers(t *testing.T) {
-	var raw map[string]any
-	json.Unmarshal([]byte(`{"jobDefinitionName":"x","type":"container","retryStrategey":{"attempts":1}}`), &raw)
-	if _, err := Normalize(raw); err == nil {
-		t.Fatal("expected an error for the misspelled member retryStrategey")
+	for _, c := range []struct{ name, src string }{
+		{"top level", `{"jobDefinitionName":"x","type":"container","retryStrategey":{"attempts":1}}`},
+		{"nested", `{"jobDefinitionName":"x","type":"container","containerProperties":{"imgae":"app"}}`},
+	} {
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(c.src), &raw); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Normalize(raw); err == nil {
+			t.Errorf("%s: expected an error for the misspelled member", c.name)
+		}
 	}
 }

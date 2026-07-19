@@ -1,11 +1,104 @@
 package batchbru
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// TestInitRejectsInvalidName guards the file path built from the name: a name
+// like ../../x must not escape the target directory. The AWS API would reject
+// such a name anyway, so nothing legitimate is lost.
+func TestInitRejectsInvalidName(t *testing.T) {
+	for _, name := range []string{"../escape", "a/b", "", strings.Repeat("x", 129)} {
+		err := Init(t.Context(), filepath.Join(t.TempDir(), "batchbru.yml"),
+			&InitOption{JobDefinition: name, Format: "jsonnet", Path: "jobdefs"}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "invalid job definition name") {
+			t.Errorf("name %q: got %v, want an invalid-name error", name, err)
+		}
+	}
+}
+
+// TestInitImportsDefinition covers the orchestration around the AWS calls:
+// the definition file lands where the configuration expects it, loads back
+// through the normal path, the configuration starts listing it, and the user
+// is told about both files.
+func TestInitImportsDefinition(t *testing.T) {
+	f := newFakeBatch()
+	app, _ := testApp(t, f, minimalDef)
+	mustDeploy(t, app, &DeployOption{})
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "batchbru.yml")
+	out := &bytes.Buffer{}
+	opt := &InitOption{JobDefinition: "example", Format: "jsonnet", Path: "jobdefs"}
+	if err := importJobDefinition(t.Context(), f, configPath, opt, out); err != nil {
+		t.Fatal(err)
+	}
+
+	defPath := filepath.Join(dir, "jobdefs", "example.jsonnet")
+	jd, err := LoadJobDefFile(defPath, testFuncs(t), &JsonnetOptions{})
+	if err != nil {
+		t.Fatalf("the imported file does not load back: %v", err)
+	}
+	if jd.Name != "example" {
+		t.Errorf("imported name is %q, want example", jd.Name)
+	}
+	cfg, err := LoadConfig(t.Context(), configPath, testFuncs(t), &JsonnetOptions{})
+	if err != nil {
+		t.Fatalf("the created config does not load: %v", err)
+	}
+	if len(cfg.JobDefinitions) != 1 || cfg.JobDefinitions[0] != "jobdefs/example.jsonnet" {
+		t.Errorf("job_definitions is %v, want the imported file", cfg.JobDefinitions)
+	}
+	for _, p := range []string{defPath, configPath} {
+		if !strings.Contains(out.String(), p) {
+			t.Errorf("the output does not mention %s:\n%s", p, out.String())
+		}
+	}
+}
+
+// TestInitRefusesToOverwrite guards the file that may hold hand-written
+// parameterisation: without --overwrite a second init must not touch it.
+func TestInitRefusesToOverwrite(t *testing.T) {
+	f := newFakeBatch()
+	app, _ := testApp(t, f, minimalDef)
+	mustDeploy(t, app, &DeployOption{})
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "batchbru.yml")
+	defPath := write(t, dir, "jobdefs/example.jsonnet", "// hand-written\n{}")
+	opt := &InitOption{JobDefinition: "example", Format: "jsonnet", Path: "jobdefs"}
+
+	err := importJobDefinition(t.Context(), f, configPath, opt, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "--overwrite") {
+		t.Fatalf("got %v, want a refusal pointing at --overwrite", err)
+	}
+	got, _ := os.ReadFile(defPath)
+	if !strings.Contains(string(got), "hand-written") {
+		t.Errorf("the existing file was replaced:\n%s", got)
+	}
+
+	opt.Overwrite = true
+	if err := importJobDefinition(t.Context(), f, configPath, opt, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = os.ReadFile(defPath)
+	if strings.Contains(string(got), "hand-written") {
+		t.Error("--overwrite did not replace the file")
+	}
+}
+
+func TestInitReportsMissingDefinition(t *testing.T) {
+	err := importJobDefinition(t.Context(), newFakeBatch(), filepath.Join(t.TempDir(), "batchbru.yml"),
+		&InitOption{JobDefinition: "ghost", Format: "jsonnet", Path: "jobdefs"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "no ACTIVE revision") {
+		t.Errorf("got %v, want a no-ACTIVE-revision error", err)
+	}
+}
 
 // TestAddToConfigCreatesFile covers the first init in a fresh directory.
 func TestAddToConfigCreatesFile(t *testing.T) {

@@ -172,6 +172,16 @@ func testApp(t *testing.T, f *fakeBatch, defs ...string) (*App, *bytes.Buffer) {
 	return &App{Config: &Config{}, JobDefs: jobDefs, Batch: f, Stdout: out, Stderr: out}, out
 }
 
+// mustDeploy is a setup step. A setup deploy that failed silently would let
+// the assertions that follow pass vacuously -- a revision that was never
+// registered shows neither a diff nor an INACTIVE entry.
+func mustDeploy(t *testing.T, app *App, opt *DeployOption) {
+	t.Helper()
+	if err := app.Deploy(context.Background(), opt); err != nil {
+		t.Fatalf("setup deploy: %v", err)
+	}
+}
+
 const minimalDef = `{
   "jobDefinitionName": "example",
   "type": "container",
@@ -274,9 +284,20 @@ func TestDiffShowsChangedMember(t *testing.T) {
 	if err := app.Diff(ctx, &DiffOption{}); err != nil {
 		t.Fatal(err)
 	}
-	s := out.String()
-	if !strings.Contains(s, "-") || !strings.Contains(s, "app:v2") {
-		t.Errorf("expected the diff to show the new image, got:\n%s", s)
+	// The direction matters: the remote image is removed, the local one added.
+	// Swapping the sides of the diff would still contain both strings, so the
+	// sign and the value have to be checked on the same line.
+	var removedOld, addedNew bool
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.HasPrefix(line, "-") && strings.Contains(line, "app:v1") {
+			removedOld = true
+		}
+		if strings.HasPrefix(line, "+") && strings.Contains(line, "app:v2") {
+			addedNew = true
+		}
+	}
+	if !removedOld || !addedNew {
+		t.Errorf("expected the diff to remove app:v1 and add app:v2, got:\n%s", out.String())
 	}
 }
 
@@ -318,11 +339,23 @@ func TestRunFailureReportsReason(t *testing.T) {
 	app, _ := testApp(t, f, minimalDef)
 	app.WaitInterval = time.Millisecond
 	ctx := context.Background()
-	app.Deploy(ctx, &DeployOption{})
+	mustDeploy(t, app, &DeployOption{})
 
 	err := app.Run(ctx, &RunOption{Queue: "default", Wait: true})
 	if err == nil || !strings.Contains(err.Error(), "Essential container") {
 		t.Errorf("run reported %v, want the failure reason", err)
+	}
+}
+
+// TestRunWaitJobDisappeared: DescribeJobs stops returning very old jobs, so an
+// empty answer has to surface as an error rather than poll forever.
+func TestRunWaitJobDisappeared(t *testing.T) {
+	f := newFakeBatch() // an empty jobPlan makes DescribeJobs return no jobs
+	app, _ := testApp(t, f, minimalDef)
+	app.WaitInterval = time.Millisecond
+	err := app.Run(context.Background(), &RunOption{Queue: "default", Wait: true})
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("got %v, want a not-found error", err)
 	}
 }
 
@@ -427,8 +460,8 @@ func TestRollbackDryRun(t *testing.T) {
 	f := newFakeBatch()
 	app, _ := testApp(t, f, minimalDef)
 	ctx := context.Background()
-	app.Deploy(ctx, &DeployOption{})
-	app.Deploy(ctx, &DeployOption{Force: true})
+	mustDeploy(t, app, &DeployOption{})
+	mustDeploy(t, app, &DeployOption{Force: true})
 	if err := app.Rollback(ctx, &RollbackOption{DryRun: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -465,8 +498,8 @@ func TestDeregisterSpecificRevision(t *testing.T) {
 	f := newFakeBatch()
 	app, _ := testApp(t, f, minimalDef)
 	ctx := context.Background()
-	app.Deploy(ctx, &DeployOption{})
-	app.Deploy(ctx, &DeployOption{Force: true})
+	mustDeploy(t, app, &DeployOption{})
+	mustDeploy(t, app, &DeployOption{Force: true})
 
 	if err := app.Deregister(ctx, &DeregisterOption{Revision: 1, Force: true}); err != nil {
 		t.Fatal(err)
@@ -485,6 +518,9 @@ func TestDeregisterRequiresExactlyOneSelector(t *testing.T) {
 	}
 	if err := app.Deregister(ctx, &DeregisterOption{Revision: 1, KeepLatest: 1}); err == nil {
 		t.Error("expected an error when both --revision and --keep-latest are given")
+	}
+	if err := app.Deregister(ctx, &DeregisterOption{Revision: -1}); err == nil || !strings.Contains(err.Error(), "1 or more") {
+		t.Errorf("--revision -1 reported %v, want a message about the valid range", err)
 	}
 }
 
@@ -520,6 +556,23 @@ func (f *failingDescribe) DescribeJobDefinitions(ctx context.Context, in *batch.
 	return f.fakeBatch.DescribeJobDefinitions(ctx, in, opts...)
 }
 
+// TestRender checks that the output is the evaluated definition as parseable
+// JSON -- render feeds scripts and dry inspection, so text decoration would
+// break it.
+func TestRender(t *testing.T) {
+	app, out := testApp(t, newFakeBatch(), minimalDef)
+	if err := app.Render(context.Background(), &RenderOption{}); err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(out.Bytes(), &raw); err != nil {
+		t.Fatalf("render did not produce valid JSON: %v\n%s", err, out.String())
+	}
+	if raw["jobDefinitionName"] != "example" {
+		t.Errorf("rendered definition is %v", raw)
+	}
+}
+
 func TestStatusAndRevisions(t *testing.T) {
 	f := newFakeBatch()
 	app, out := testApp(t, f, minimalDef)
@@ -532,9 +585,11 @@ func TestStatusAndRevisions(t *testing.T) {
 		t.Errorf("status should report an unregistered definition, got:\n%s", out.String())
 	}
 
-	app.Deploy(ctx, &DeployOption{})
-	app.Deploy(ctx, &DeployOption{Force: true})
-	app.Deregister(ctx, &DeregisterOption{Revision: 1, Force: true})
+	mustDeploy(t, app, &DeployOption{})
+	mustDeploy(t, app, &DeployOption{Force: true})
+	if err := app.Deregister(ctx, &DeregisterOption{Revision: 1, Force: true}); err != nil {
+		t.Fatalf("setup deregister: %v", err)
+	}
 
 	out.Reset()
 	if err := app.Revisions(ctx, &RevisionsOption{}); err != nil {
@@ -558,11 +613,11 @@ func TestStatusAndRevisions(t *testing.T) {
 // and the region in the configuration file was silently ignored.
 func TestAWSLoaderUsesConfiguredRegion(t *testing.T) {
 	isolateAWSEnv(t)
-	l := &awsLoader{ctx: context.Background()}
+	l := &awsLoader{}
 
 	// An ssm lookup during config loading forces a load before the region is
 	// known; the region falls back to the SDK default, which is empty here.
-	early, err := l.config()
+	early, err := l.load(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -571,7 +626,7 @@ func TestAWSLoaderUsesConfiguredRegion(t *testing.T) {
 	}
 
 	l.setRegion("ap-northeast-1")
-	got, err := l.config()
+	got, err := l.load(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -582,13 +637,13 @@ func TestAWSLoaderUsesConfiguredRegion(t *testing.T) {
 
 func TestAWSLoaderCachesPerRegion(t *testing.T) {
 	isolateAWSEnv(t)
-	l := &awsLoader{ctx: context.Background()}
+	l := &awsLoader{}
 	l.setRegion("us-east-1")
-	if _, err := l.config(); err != nil {
+	if _, err := l.load(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	first := l.cfg
-	if _, err := l.config(); err != nil {
+	if _, err := l.load(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if l.cfg != first {
@@ -642,8 +697,8 @@ func TestDeregisterContinuesAfterFailure(t *testing.T) {
 	other := strings.Replace(minimalDef, `"example"`, `"other"`, 1)
 	app, _ := testApp(t, f, minimalDef, other)
 	ctx := context.Background()
-	app.Deploy(ctx, &DeployOption{})
-	app.Deploy(ctx, &DeployOption{Force: true})
+	mustDeploy(t, app, &DeployOption{})
+	mustDeploy(t, app, &DeployOption{Force: true})
 
 	app.Batch = &failingDescribe{fakeBatch: f, failFor: "example"}
 	err := app.Deregister(ctx, &DeregisterOption{KeepLatest: 1, Force: true})
@@ -665,8 +720,8 @@ func TestDeregisterDryRunReportsListingFailure(t *testing.T) {
 	other := strings.Replace(minimalDef, `"example"`, `"other"`, 1)
 	app, _ := testApp(t, f, minimalDef, other)
 	ctx := context.Background()
-	app.Deploy(ctx, &DeployOption{})
-	app.Deploy(ctx, &DeployOption{Force: true})
+	mustDeploy(t, app, &DeployOption{})
+	mustDeploy(t, app, &DeployOption{Force: true})
 
 	app.Batch = &failingDescribe{fakeBatch: f, failFor: "example"}
 	err := app.Deregister(ctx, &DeregisterOption{KeepLatest: 1, DryRun: true})
@@ -678,13 +733,42 @@ func TestDeregisterDryRunReportsListingFailure(t *testing.T) {
 	}
 }
 
+// TestDeregisterConfirmation covers the prompt: declining leaves every
+// revision registered, agreeing deregisters them.
+func TestDeregisterConfirmation(t *testing.T) {
+	f := newFakeBatch()
+	app, out := testApp(t, f, minimalDef)
+	ctx := context.Background()
+	mustDeploy(t, app, &DeployOption{})
+	mustDeploy(t, app, &DeployOption{Force: true})
+
+	app.Stdin = strings.NewReader("n\n")
+	if err := app.Deregister(ctx, &DeregisterOption{KeepLatest: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.deregistered) != 0 {
+		t.Error("revisions were deregistered although the prompt was declined")
+	}
+	if !strings.Contains(out.String(), "aborted") {
+		t.Errorf("expected the abort to be reported, got:\n%s", out.String())
+	}
+
+	app.Stdin = strings.NewReader("y\n")
+	if err := app.Deregister(ctx, &DeregisterOption{KeepLatest: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.deregistered) != 1 {
+		t.Errorf("deregistered %d revisions after agreeing, want 1", len(f.deregistered))
+	}
+}
+
 // TestDeregisterRejectsKeepingNone guards the operation that would deregister
 // every revision and leave the job definition unusable.
 func TestDeregisterRejectsKeepingNone(t *testing.T) {
 	f := newFakeBatch()
 	app, _ := testApp(t, f, minimalDef)
 	ctx := context.Background()
-	app.Deploy(ctx, &DeployOption{})
+	mustDeploy(t, app, &DeployOption{})
 
 	err := app.Deregister(ctx, &DeregisterOption{KeepLatest: -1, Force: true})
 	if err == nil || !strings.Contains(err.Error(), "1 or more") {

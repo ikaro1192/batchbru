@@ -22,6 +22,7 @@ type App struct {
 	Batch   BatchAPI
 
 	Debug  bool
+	Stdin  io.Reader // confirmation prompts read from here; nil means os.Stdin
 	Stdout io.Writer
 	Stderr io.Writer
 	// WaitInterval is how often run --wait polls the job status. The zero
@@ -43,10 +44,10 @@ func (o *Options) jsonnet() *JsonnetOptions {
 
 // New loads the configuration and job definitions and builds the AWS clients.
 func New(ctx context.Context, opts *Options) (*App, error) {
-	app := &App{Debug: opts.Debug, Stdout: os.Stdout, Stderr: os.Stderr}
-	loader := &awsLoader{ctx: ctx}
+	app := &App{Debug: opts.Debug, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
+	loader := &awsLoader{}
 	base := baseFuncs(ctx, func() (SSMAPI, error) {
-		c, err := loader.config()
+		c, err := loader.load(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -74,7 +75,7 @@ func New(ctx context.Context, opts *Options) (*App, error) {
 	for _, jd := range defs {
 		app.debugf("loaded job definition %s from %s", jd.Name, jd.Path)
 	}
-	awsCfg, err := loader.config()
+	awsCfg, err := loader.load(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -91,8 +92,6 @@ func New(ctx context.Context, opts *Options) (*App, error) {
 // rebuilt if the region changes, which happens when the configuration file
 // names a region after an ssm lookup has already forced a load.
 type awsLoader struct {
-	ctx context.Context
-
 	mu        sync.Mutex
 	region    string
 	cfg       *aws.Config
@@ -105,7 +104,7 @@ func (l *awsLoader) setRegion(region string) {
 	l.region = region
 }
 
-func (l *awsLoader) config() (aws.Config, error) {
+func (l *awsLoader) load(ctx context.Context) (aws.Config, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.cfg != nil && l.cfgRegion == l.region {
@@ -115,7 +114,7 @@ func (l *awsLoader) config() (aws.Config, error) {
 	if l.region != "" {
 		opts = append(opts, awsconfig.WithRegion(l.region))
 	}
-	cfg, err := awsconfig.LoadDefaultConfig(l.ctx, opts...)
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return aws.Config{}, fmt.Errorf("failed to load AWS config: %w", err)
 	}

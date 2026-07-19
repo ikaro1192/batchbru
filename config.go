@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/goccy/go-yaml"
@@ -89,7 +89,7 @@ func (c *Config) ResolveJobDefinitionFiles() ([]string, error) {
 			}
 		}
 	}
-	sort.Strings(files)
+	slices.Sort(files)
 	return files, nil
 }
 

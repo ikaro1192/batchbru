@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -134,8 +135,10 @@ func TestResolveJobDefinitionFilesGlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 2 {
-		t.Fatalf("matched %v, want the two etl files", files)
+	// Sorted order is part of the contract: it keeps the processing order, and
+	// with it the output, stable across runs.
+	if len(files) != 2 || !strings.HasSuffix(files[0], "etl-a.json") || !strings.HasSuffix(files[1], "etl-b.json") {
+		t.Fatalf("matched %v, want the two etl files in name order", files)
 	}
 }
 
@@ -160,6 +163,9 @@ func TestFilter(t *testing.T) {
 	}
 	if _, err := Filter(defs, []string{"nope"}); err == nil {
 		t.Fatal("expected an error when --name matches nothing")
+	}
+	if _, err := Filter(defs, []string{"["}); err == nil {
+		t.Fatal("expected an error for a malformed pattern")
 	}
 
 	// Overlapping patterns: a definition already selected by an earlier pattern

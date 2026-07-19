@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
-	"sort"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -286,7 +285,7 @@ func isDefaultValue(v any, path string) bool {
 // nonFalsyDefaults does not know about yet -- a false diff.
 func RemoteOnlyPaths(remote, local map[string]any) []string {
 	paths := remoteOnlyObject(remote, local, "")
-	sort.Strings(paths)
+	slices.Sort(paths)
 	return slices.Compact(paths)
 }
 

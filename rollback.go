@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
@@ -75,9 +74,9 @@ func (a *App) Deregister(ctx context.Context, opt *DeregisterOption) error {
 		return fmt.Errorf("--revision and --keep-latest cannot be combined")
 	case opt.Revision == 0 && opt.KeepLatest == 0:
 		return fmt.Errorf("either --revision or --keep-latest is required")
-	case opt.Revision < 1 && opt.Revision != 0:
+	case opt.Revision < 0:
 		return fmt.Errorf("--revision must be 1 or more")
-	case opt.KeepLatest < 1 && opt.KeepLatest != 0:
+	case opt.KeepLatest < 0:
 		// Keeping none would deregister every revision and leave the job
 		// definition unusable, which is what rollback also refuses to do.
 		return fmt.Errorf("--keep-latest must be 1 or more; keeping none would deregister every revision")
@@ -130,7 +129,7 @@ func (a *App) Deregister(ctx context.Context, opt *DeregisterOption) error {
 		return ec.err()
 	}
 	if !opt.Force {
-		ok, err := confirm(a.Stdout, fmt.Sprintf("deregister %d revision(s)?", len(victims)))
+		ok, err := a.confirm(fmt.Sprintf("deregister %d revision(s)?", len(victims)))
 		if err != nil {
 			return err
 		}
@@ -148,9 +147,15 @@ func (a *App) Deregister(ctx context.Context, opt *DeregisterOption) error {
 	return ec.err()
 }
 
-func confirm(w io.Writer, prompt string) (bool, error) {
-	fmt.Fprintf(w, "%s [y/N]: ", prompt)
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+// confirm asks the user a yes/no question. Anything but an explicit yes -- a
+// closed stdin included, as in CI -- counts as no.
+func (a *App) confirm(prompt string) (bool, error) {
+	fmt.Fprintf(a.Stdout, "%s [y/N]: ", prompt)
+	in := a.Stdin
+	if in == nil {
+		in = os.Stdin
+	}
+	line, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil {
 		return false, fmt.Errorf("failed to read the answer: %w", err)
 	}

@@ -6,12 +6,19 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/batch"
 	"github.com/goccy/go-yaml"
 )
+
+// jobDefNameRe is the character set AWS Batch allows in a job definition name.
+// Validating up front gives a clear error instead of an API failure, and --
+// because the name becomes part of the file path init writes to -- keeps a
+// name like ../../x from escaping the target directory.
+var jobDefNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // InitOption configures the init command.
 type InitOption struct {
@@ -25,6 +32,9 @@ type InitOption struct {
 // Init imports an existing job definition from AWS and starts tracking it in
 // the configuration file, creating the file if it does not exist yet.
 func Init(ctx context.Context, configPath string, opt *InitOption, stdout io.Writer) error {
+	if !jobDefNameRe.MatchString(opt.JobDefinition) {
+		return fmt.Errorf("invalid job definition name %q: up to 128 letters, numbers, hyphens and underscores", opt.JobDefinition)
+	}
 	var loadOpts []func(*awsconfig.LoadOptions) error
 	if opt.Region != "" {
 		loadOpts = append(loadOpts, awsconfig.WithRegion(opt.Region))
@@ -33,8 +43,14 @@ func Init(ctx context.Context, configPath string, opt *InitOption, stdout io.Wri
 	if err != nil {
 		return fmt.Errorf("failed to load AWS config: %w", err)
 	}
-	client := batch.NewFromConfig(awsCfg)
+	return importJobDefinition(ctx, batch.NewFromConfig(awsCfg), configPath, opt, stdout)
+}
 
+// importJobDefinition is Init after the AWS client has been built: everything
+// here is deterministic given the client, which is what makes the overwrite
+// guard and the file handling testable. opt.JobDefinition is assumed to be
+// validated.
+func importJobDefinition(ctx context.Context, client BatchAPI, configPath string, opt *InitOption, stdout io.Writer) error {
 	remote, err := latestActive(ctx, client, opt.JobDefinition)
 	if err != nil {
 		return err
