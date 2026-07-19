@@ -1,0 +1,142 @@
+name: 'Setup batchbru'
+description: 'Install batchbru, a CLI for managing AWS Batch job definitions as code'
+branding:
+  icon: 'package'
+  color: 'orange'
+
+inputs:
+  version:
+    description: 'Version to install: a release tag such as v0.1.0, or "latest"'
+    required: false
+    default: 'latest'
+  token:
+    description: >-
+      Token used to reach the batchbru repository. The default only has access
+      from within this repository; using the action from another repository
+      while batchbru is private needs a personal access token with read access.
+    required: false
+    default: ${{ github.token }}
+  go-version:
+    description: 'Go version used to build batchbru when no release binary is available'
+    required: false
+    default: 'stable'
+
+runs:
+  using: 'composite'
+  steps:
+    # Release archives are named without the version so that "latest" can be
+    # downloaded without first resolving it to a tag; a release pipeline added
+    # later has to follow the same convention.
+    - name: Download the release binary
+      id: download
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ inputs.token }}
+        ACTION_REPOSITORY: ${{ github.action_repository }}
+      run: |
+        set -euo pipefail
+        repo="${ACTION_REPOSITORY:-ikaro1192/batchbru}"
+
+        case "$RUNNER_OS" in
+          Linux)   os=linux ;;
+          macOS)   os=darwin ;;
+          Windows) os=windows ;;
+          *) echo "::error::unsupported runner OS $RUNNER_OS"; exit 1 ;;
+        esac
+        case "$RUNNER_ARCH" in
+          X64)   arch=amd64 ;;
+          ARM64) arch=arm64 ;;
+          *) echo "::error::unsupported runner architecture $RUNNER_ARCH"; exit 1 ;;
+        esac
+
+        asset="batchbru_${os}_${arch}.tar.gz"
+        dir="${RUNNER_TEMP}/batchbru"
+        mkdir -p "$dir"
+
+        # The tag is spelled out in both branches rather than built up in an
+        # array: expanding an empty array under "set -u" aborts on the bash 3.2
+        # that macOS still ships.
+        download_with_gh() {
+          if [ "$VERSION" = "latest" ]; then
+            gh release download --repo "$repo" --pattern "$asset" --dir "$dir" --clobber
+          else
+            gh release download "$VERSION" --repo "$repo" --pattern "$asset" --dir "$dir" --clobber
+          fi
+        }
+
+        # gh is preferred: it is the only one of the two that can reach a
+        # private repository. The plain download covers a self-hosted runner
+        # that does not have gh installed.
+        ok=false
+        if command -v gh >/dev/null 2>&1 && [ -n "${GH_TOKEN:-}" ]; then
+          if download_with_gh >/dev/null 2>&1; then
+            ok=true
+          fi
+        else
+          if [ "$VERSION" = "latest" ]; then
+            url="https://github.com/${repo}/releases/latest/download/${asset}"
+          else
+            url="https://github.com/${repo}/releases/download/${VERSION}/${asset}"
+          fi
+          if curl -fsSL "$url" -o "${dir}/${asset}" 2>/dev/null; then
+            ok=true
+          fi
+        fi
+
+        # No published release is not an error: the next steps build from
+        # source instead. A broken archive is.
+        if [ "$ok" != true ]; then
+          echo "no ${asset} published for ${VERSION}, building from source instead"
+          echo "installed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        tar -xzf "${dir}/${asset}" -C "$dir"
+        bin="${dir}/batchbru"
+        if [ "$os" = windows ]; then
+          bin="${bin}.exe"
+        fi
+        if [ ! -f "$bin" ]; then
+          echo "::error::${asset} does not contain $(basename "$bin")"
+          exit 1
+        fi
+        chmod +x "$bin"
+        echo "$dir" >> "$GITHUB_PATH"
+        echo "installed=true" >> "$GITHUB_OUTPUT"
+
+    - name: Set up Go
+      if: steps.download.outputs.installed != 'true'
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}
+
+    # The module path comes from go.mod, so unlike the download location it is
+    # fixed even when the action is used from a fork.
+    - name: Build from source
+      if: steps.download.outputs.installed != 'true'
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        module="github.com/ikaro1192/batchbru"
+        if [ -n "${TOKEN:-}" ]; then
+          # While the repository is private it is served by neither the module
+          # proxy nor the checksum database, and the fetch needs credentials.
+          export GOPRIVATE="${module}"
+          git config --global \
+            "url.https://x-access-token:${TOKEN}@github.com/.insteadOf" \
+            "https://github.com/"
+        fi
+        go install "${module}/cmd/batchbru@${VERSION}"
+        bindir="$(go env GOBIN)"
+        if [ -z "$bindir" ]; then
+          bindir="$(go env GOPATH)/bin"
+        fi
+        echo "$bindir" >> "$GITHUB_PATH"
+
+    - name: Verify the installation
+      shell: bash
+      run: batchbru version

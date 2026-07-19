@@ -1,0 +1,27 @@
+name: action
+
+# Exercises action.yml itself: whether batchbru ends up on PATH is something
+# only a real runner can answer.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+      - name: batchbru is on PATH
+        run: |
+          command -v batchbru
+          batchbru version
+          batchbru --help

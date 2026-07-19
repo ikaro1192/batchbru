@@ -1,0 +1,35 @@
+version: 2
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: batchbru
+    main: ./cmd/batchbru
+    binary: batchbru
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/ikaro1192/batchbru.Version={{ .Version }}
+
+archives:
+  # action.yml downloads batchbru_<os>_<arch>.tar.gz. The version is left out
+  # of the name so that the latest release can be fetched without resolving it
+  # to a tag first, and tar.gz is used on every platform including Windows;
+  # changing either breaks the action.
+  - id: batchbru
+    formats: [tar.gz]
+    name_template: 'batchbru_{{ .Os }}_{{ .Arch }}'
+    files: [README.md, LICENSE]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'

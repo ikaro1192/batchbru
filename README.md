@@ -62,6 +62,46 @@ batchbru's emphasis is on making unattended CI deploys safe:
 $ go install github.com/ikaro1192/batchbru/cmd/batchbru@latest
 ```
 
+### GitHub Actions
+
+This repository is itself an action that puts `batchbru` on `PATH`, so the commands can be used
+from a workflow as they are on a terminal:
+
+```yaml
+- uses: ikaro1192/batchbru@main   # pin to a release tag once one exists
+  with:
+    version: v0.1.0   # or "latest", the default
+- uses: aws-actions/configure-aws-credentials@v4
+  with:
+    role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+    aws-region: ap-northeast-1
+- run: batchbru diff
+```
+
+| Input | Default | Description |
+|---|---|---|
+| `version` | `latest` | Release tag to install, or `latest` |
+| `token` | `${{ github.token }}` | Token used to reach this repository |
+| `go-version` | `stable` | Go version used when batchbru has to be built from source |
+
+The action installs a published release archive when there is one, and otherwise builds from
+source with Go, so it also works for a revision that was never released.
+
+While this repository is private, `token` needs read access to it: the default
+`${{ github.token }}` only works for workflows in this repository, and using the action from
+another repository requires a personal access token.
+
+A typical pipeline reviews on pull requests and deploys on merge:
+
+```yaml
+- run: batchbru diff        # on pull requests: show what deploying would change
+- run: batchbru deploy      # on the default branch: registers nothing when unchanged
+- run: batchbru run --name etl-daily --queue default --wait   # smoke-test the new revision
+```
+
+`batchbru diff --exit-code` fails when the local definitions and AWS disagree, which makes it a
+drift check to run on a schedule.
+
 ## Usage
 
 ### Import an existing job definition
@@ -290,4 +330,21 @@ processed; errors are reported together at the end with exit code 1.
 ```console
 $ make test
 $ make build
+$ make lint
 ```
+
+`make lint` and `make test` are what CI runs (`.github/workflows/ci.yml`), and
+`.github/workflows/test-action.yml` installs batchbru through `action.yml` on Linux and macOS
+runners to check that the action itself still works.
+
+### Releasing
+
+Pushing a `v*` tag runs GoReleaser (`.goreleaser.yml`) and publishes the binaries:
+
+```console
+$ git tag v0.1.0 && git push origin v0.1.0
+```
+
+The archives are named `batchbru_<os>_<arch>.tar.gz` — tar.gz on every platform, and without the
+version in the file name so that the action can fetch the latest release without resolving it to
+a tag first. `action.yml` depends on both of those, so the two files have to be changed together.

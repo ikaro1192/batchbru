@@ -1,3 +1,4 @@
 /batchbru
+/dist/
 *.tfstate.backup
 .env
