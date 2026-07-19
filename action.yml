@@ -125,10 +125,14 @@ runs:
         if [ -n "${TOKEN:-}" ]; then
           # While the repository is private it is served by neither the module
           # proxy nor the checksum database, and the fetch needs credentials.
+          # The insteadOf rewrite is passed through git's environment rather
+          # than written with `git config --global`, so the token never lands
+          # on disk -- on a self-hosted runner a global gitconfig would keep
+          # it beyond this job.
           export GOPRIVATE="${module}"
-          git config --global \
-            "url.https://x-access-token:${TOKEN}@github.com/.insteadOf" \
-            "https://github.com/"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="url.https://x-access-token:${TOKEN}@github.com/.insteadOf"
+          export GIT_CONFIG_VALUE_0="https://github.com/"
         fi
         go install "${module}/cmd/batchbru@${VERSION}"
         bindir="$(go env GOBIN)"

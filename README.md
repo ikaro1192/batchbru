@@ -244,6 +244,11 @@ Use `--ext-str` / `--ext-code` to pass Jsonnet external variables.
 When using multiple tfstate sources, set `func_prefix`.
 With `func_prefix: shared_`, reference it as `{{ shared_tfstate ... }}`.
 
+A value returned by `ssm` becomes part of the rendered definition: it appears in `render` and
+`diff` output (and therefore in CI logs), and it is stored in the registered job definition,
+readable by anyone allowed `batch:DescribeJobDefinitions`. Use `ssm` for configuration, not for
+secrets — pass secrets to the container at runtime with `containerProperties.secrets` instead.
+
 ### Prefer `must_env` for the image tag
 
 Neither function resolves anything by itself: `env` and `must_env` only read the environment, so
